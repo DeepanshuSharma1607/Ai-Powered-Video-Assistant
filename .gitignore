@@ -1,0 +1,38 @@
+# Environment
+.env
+www.youtube.com_cookies (1).txt
+.dockerignore
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual env
+venv/
+.venv/
+env/
+
+# Project specific
+downloads/
+vector_db/
+*.wav
+*.mp4
+*.webm
+*.m4a
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
