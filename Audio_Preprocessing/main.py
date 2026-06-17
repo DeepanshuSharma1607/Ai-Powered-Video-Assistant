@@ -1,8 +1,8 @@
 from dotenv import load_dotenv
-from audio_preprocessor import process_input
-from transcriber import transcribe_all
-from llm_pipeline import generate_title, summarize, extract_action_items, extract_key_decisions, extract_questions
-from vector_store import build_rag_chain, ask_questions
+from Audio_Preprocessing.audio_processor import process_input
+from Audio_Preprocessing.transcriber import transcribe_all
+from Audio_Preprocessing.llm_pipeline import generate_title, summarize, extract_action_items, extract_key_decisions, extract_questions
+from Audio_Preprocessing.vector_store import build_rag_chain, ask_questions
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 

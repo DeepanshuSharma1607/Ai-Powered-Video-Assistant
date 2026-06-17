@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 
-API_BASE = "http://localhost:8000"
+API_BASE = "http://127.0.0.1:8000"
 
 st.set_page_config(
     page_title="MeetingMind",
@@ -100,7 +100,7 @@ def api(endpoint, *, method="POST", files=None, data=None, json=None, timeout=36
         r.raise_for_status()
         return r.json(), None
     except requests.exceptions.ConnectionError:
-        return None, "Cannot reach the backend. Is `uvicorn app:app` running?"
+        return None, "Cannot reach the backend. Is `uvicorn backend.app:app` running?"
     except requests.exceptions.HTTPError as e:
         try:    msg = e.response.json().get("detail", str(e))
         except: msg = str(e)

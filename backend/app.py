@@ -1,10 +1,10 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form , Body
 from pydantic import BaseModel
-from main import run_pipeline
-from vector_store import ask_questions
-from transcriber import transcribe_all
-from llm_pipeline import split_transcript
-from database_ import load_transcript , save_transcript , cleanup_temp_files , UPLOAD_DIR , TRANSCRIPT_DIR , TRANSCRIPT_FILE
+from Audio_Preprocessing.main import run_pipeline
+from Audio_Preprocessing.vector_store import build_rag_chain, ask_questions
+from Audio_Preprocessing.transcriber import transcribe_all
+from Audio_Preprocessing.llm_pipeline import split_transcript
+from backend.database_ import load_transcript , save_transcript , cleanup_temp_files , UPLOAD_DIR , TRANSCRIPT_DIR , TRANSCRIPT_FILE
 import os
 import shutil
 
