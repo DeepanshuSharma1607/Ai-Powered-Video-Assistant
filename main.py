@@ -2,16 +2,36 @@ from dotenv import load_dotenv
 from audio_preprocessor import process_input
 from transcriber import transcribe_all
 from llm_pipeline import generate_title, summarize, extract_action_items, extract_key_decisions, extract_questions
-from vector_store import build_rag_chain, ask_question
+from vector_store import build_rag_chain, ask_questions
 from concurrent.futures import ThreadPoolExecutor
+from typing import Optional
 
 load_dotenv()
 
-def run_pipeline(source: str, language: str = "english") -> dict:
-    print("Starting AI Meeting Assistant...")
-    chunks = process_input(source)
-    transcript = transcribe_all(chunks, language=language)
-    print(f"Raw Transcription (first 300 chars):\n{transcript[:300]}")
+def run_pipeline(
+    source: Optional[str] = None,
+    transcript: Optional[str] = None,
+    language: str = "english"
+) -> dict:
+
+    if transcript is None:
+
+        if source is None:
+            raise ValueError(
+                "Either source or transcript must be provided."
+            )
+
+        chunks = process_input(source)
+
+        transcript = transcribe_all(
+            chunks,
+            language=language
+        )
+
+    print(
+        f"Raw Transcription (first 300 chars):\n{transcript[:300]}"
+    )
+
     with ThreadPoolExecutor(max_workers=5) as executor:
         future_title = executor.submit(generate_title, transcript)
         future_summary = executor.submit(summarize, transcript)
@@ -24,8 +44,9 @@ def run_pipeline(source: str, language: str = "english") -> dict:
         action_items = future_actions.result()
         decisions = future_decisions.result()
         questions = future_questions.result()
+
     rag_chain = build_rag_chain(transcript)
-    
+
     return {
         "title": title,
         "transcript": transcript,
@@ -53,11 +74,11 @@ if __name__ == "__main__":
     rag_chain = result['rag_chain']
 
     while True:
-        question = input("You: ").strip()
-        if question.lower() in ['exit', 'quit', 'q']:
+        questions = input("You: ").strip()
+        if questions.lower() in ['exit', 'quit', 'q']:
             print("Goodbye...")
             break
-        if not question:
+        if not questions:
             continue
-        answer = ask_question(rag_chain, question)
+        answer = ask_questions(rag_chain, questions)
         print(f"\nAssistant: {answer}\n")

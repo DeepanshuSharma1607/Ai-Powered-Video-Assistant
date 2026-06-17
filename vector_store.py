@@ -81,5 +81,5 @@ def load_rag_chain():
     )
     return rag_chain
 
-def ask_question(rag_chain, question: str) -> str:
+def ask_questions(rag_chain, question: str) -> str:
     return rag_chain.invoke(question)
