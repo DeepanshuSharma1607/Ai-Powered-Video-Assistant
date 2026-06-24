@@ -1,183 +1,156 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form , Body
-from pydantic import BaseModel
-from Audio_Preprocessing.main import run_pipeline
-from Audio_Preprocessing.vector_store import build_rag_chain, ask_questions
-from Audio_Preprocessing.transcriber import transcribe_all
-from Audio_Preprocessing.llm_pipeline import split_transcript
-from backend.database_ import load_transcript , save_transcript , cleanup_temp_files , UPLOAD_DIR , TRANSCRIPT_DIR , TRANSCRIPT_FILE
 import os
+import re
 import shutil
+import tempfile
+import uuid
+from contextlib import asynccontextmanager
 
-app = FastAPI()
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
-class QuestionRequest(BaseModel):
+from Audio_Preprocessing.main import run_pipeline, user_ids, save_session
+from Audio_Preprocessing.vector_store import ask_questions, get_embeddings
+from Audio_Preprocessing.transcriber import load_model
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FRONTEND_INDEX = os.path.join(BASE_DIR, "frontend", "index.html")
+
+ALLOWED_AV_EXTENSIONS = {
+    ".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac",
+    ".mp4", ".mov", ".mkv", ".avi", ".webm", ".txt", ".md"
+}
+TRANSCRIPT_EXTENSIONS = {".txt", ".md"}
+
+
+ALLOWED_ORIGINS = ["http://localhost:5500", "http://127.0.0.1:5500"]
+
+
+def _safe_token(value: str, max_len: int = 64) -> str:
+    """Strip path separators and anything non-alphanumeric so user-supplied
+    strings can't be used for path traversal when building filesystem paths."""
+    value = os.path.basename(value or "")
+    value = re.sub(r"[^A-Za-z0-9_.-]", "_", value)
+    return value[:max_len] or "file"
+
+
+class Youtube_Ext(BaseModel):
+    url: str
+    user_id: str
+    append: bool = False
+
+
+class Questions(BaseModel):
+    user_id: str
     question: str
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("Warming up models...")
+    load_model()
+    get_embeddings()
+    print("Models ready.")
+    yield
+    print("Shutting down.")
+
+
+app = FastAPI(title="Audio Transcriber API", version="1.0.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 @app.get("/")
+async def root():
+    """serve the single-page frontend"""
+    return FileResponse(FRONTEND_INDEX)
+
+
+@app.get("/health")
 async def health():
-    return {"status": "working..."}
+    return {"status": "ok", "message": "The app is working fine"}
 
 
-ALLOWED_EXTENSIONS = {
-    ".mp3",
-    ".wav",
-    ".m4a",
-    ".aac",
-    ".ogg",
-    ".flac",
-    ".mp4",
-    ".mov",
-    ".mkv",
-    ".avi",
-    ".webm"
-}
-
-rag_chain_store = None
-
-@app.post("/process")
-async def process_meeting(
+@app.post("/process_text_audio")
+async def process(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    language: str = Form("english"),
-    append_previous : bool = Form(False)
+    append_previous: bool = Form(False),
+    user_id: str = Form("default"),
 ):
-    global rag_chain_store
-    try:
-        ext = os.path.splitext(file.filename)[1].lower()
+    ext = os.path.splitext(file.filename)[1].lower()
 
-        if ext not in ALLOWED_EXTENSIONS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported file type: {ext}"
-            )
+    if ext not in ALLOWED_AV_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
 
-        file_path = os.path.join(
-            UPLOAD_DIR,
-            file.filename
+    if ext in TRANSCRIPT_EXTENSIONS:
+        raw = await file.read()
+        text = raw.decode("utf-8", errors="ignore")
+        user = run_pipeline(
+            source=None,
+            transcript=text,
+            user_id=user_id,
+            append=append_previous,
+            language="english",
         )
+        return {"summary": user["summary"]} 
 
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(
-                file.file,
-                buffer
-            )
+    safe_user = _safe_token(user_id)
+    safe_filename = _safe_token(file.filename)
+    tmp_path = os.path.join(
+        tempfile.gettempdir(),
+        f"{safe_user}_{uuid.uuid4().hex}_{safe_filename}",
+    )
+    with open(tmp_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
 
-        result = run_pipeline(
-            source=file_path,
+    try:
+        user = run_pipeline(
+            source=tmp_path,
             transcript=None,
-            language=language
+            user_id=user_id,
+            append=append_previous,
+            language="english",
         )
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
-        save_transcript(
-            result["transcript"],append_previous
-        )
+    return {"summary": user["summary"]}
 
-        full_transcript = load_transcript()
 
-        result = run_pipeline(
-            source=None,
-            transcript=full_transcript,
-            language=language
-        )
+@app.post("/youtube_process")
+def youtube_process(data: Youtube_Ext):
+    user = run_pipeline(
+        source=data.url,
+        transcript=None,
+        user_id=data.user_id,
+        append=data.append,
+        language="english",
+    )
+    return {"summary": user["summary"]}
 
-        rag_chain_store = result["rag_chain"]
 
-        cleanup_temp_files()
-
-        return {
-            "title": result["title"],
-            "summary": result["summary"],
-            "action_items": result["action_items"],
-            "decisions": result["decisions"],
-            "questions": result["questions"]
-        }
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
-
-@app.post("/transcript")
-async def process_transcript(
-    file: UploadFile = File(...),
-    language: str = Form("english"),
-    append_previous : bool = Form(False)):
-
-    global rag_chain_store
+@app.post("/question")
+async def ask_question(data: Questions):
     try:
-        ext = os.path.splitext(file.filename)[1].lower()
-
-        if ext not in [".txt",".md"]:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported file type: {ext}"
-            )
-        
-        transcript_text = (
-            await file.read()
-        ).decode("utf-8")
-
-        save_transcript(
-            transcript_text,
-            append_previous
-        )
-
-        full_transcript = load_transcript()
-
-        result = run_pipeline(
-            source=None,
-            transcript=full_transcript,
-            language=language
-        )       
-        rag_chain_store = result["rag_chain"]
-
-        cleanup_temp_files()
-
-        return {
-            "title": result["title"],
-            "summary": result["summary"],
-            "action_items": result["action_items"],
-            "decisions": result["decisions"],
-            "questions": result["questions"]
-        }
+        answer = ask_questions(data.user_id, data.question)
+        return {"question": data.question, "answer": answer}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/question")
-async def ask_question(data: QuestionRequest):
-    
-    try:
-        if rag_chain_store is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Please process a meeting first."
-            )
 
-        answer = ask_questions(
-            rag_chain_store,
-            data.question
-        )
-
-        return {
-            "question": data.question,
-            "answer": answer
-        }
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=str(e)
-        )
-    
 @app.delete("/reset")
-async def reset_session():
-    global rag_chain_store
-
-    rag_chain_store = None
-
-    if os.path.exists(TRANSCRIPT_FILE):
-        os.remove(TRANSCRIPT_FILE)
-
-    return {
-        "message": "All previous transcripts removed."
-    }
+async def reset_session(user: str):
+    existed = user_ids.pop(user, None) is not None
+    save_session()
+    return {"message": f"Session for '{user}' reset." if existed else f"No session found for '{user}'."}

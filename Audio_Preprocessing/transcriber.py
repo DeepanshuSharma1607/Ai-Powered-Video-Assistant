@@ -1,28 +1,27 @@
 import os
-import requests
 from faster_whisper import WhisperModel
-from pydub import AudioSegment
 from concurrent.futures import ThreadPoolExecutor
+import threading
+from dotenv import load_dotenv
+load_dotenv()
 
-SARVAM_PIECE_SECONDS = 25
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
-SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
-SARVAM_STT_TRANSLATE_URL = "https://api.sarvam.ai/speech-to-text-translate"
-SARVAM_MODEL = os.getenv("SARVAM_STT_MODEL", "saaras:v2.5")
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "tiny.en")
 
 _model = None
+_whisper_lock = threading.Lock()
 
 def load_model():
     global _model
-
     if _model is None:
-        print(f"Loading Whisper model: {WHISPER_MODEL}...")
+        with _whisper_lock:
+            if _model is None:
+                print(f"Loading Whisper model: {WHISPER_MODEL}...")
 
-        _model = WhisperModel(
-            WHISPER_MODEL,
-            device="cpu",
-            compute_type="int8"
-        )
+                _model = WhisperModel(
+                    WHISPER_MODEL,
+                    device="cpu",
+                    compute_type="int8"
+                )
 
         print("Whisper model loaded.")
 
@@ -34,70 +33,36 @@ def transcribe_chunk_whisper(chunk_path: str) -> str:
 
     segments, _ = model.transcribe(
         chunk_path,
-        beam_size=5
+        language = "en",
+        beam_size=1,
+        vad_filter=True,
+        vad_parameters={"min_silence_duration_ms": 500}
     )
 
-    text = " ".join(
+    return " ".join(
         segment.text for segment in segments
     )
 
-    return text
-
-def _send_to_sarvam(piece_path: str) -> str:
-    headers = {"api-subscription-key": SARVAM_API_KEY}
-    with open(piece_path, "rb") as f:
-        files = {"file": (os.path.basename(piece_path), f, "audio/wav")}
-        data = {"model": SARVAM_MODEL, "with_diarization": "false"}
-        response = requests.post(
-            SARVAM_STT_TRANSLATE_URL,
-            headers=headers,
-            files=files,
-            data=data,
-            timeout=120,
-        )
-    if not response.ok:
-        print(f"\nSarvam returned {response.status_code}")
-        print(f"Response body: {response.text}\n")
-        response.raise_for_status()
-    return response.json().get("transcript", "")
-
-def transcribe_chunk_sarvam(chunk_path: str) -> str:
-    if not SARVAM_API_KEY:
-        raise RuntimeError("SARVAM_API_KEY is not set in environment / .env")
-    audio = AudioSegment.from_wav(chunk_path)
-    piece_ms = SARVAM_PIECE_SECONDS * 1000
-    full_text = ""
-    total_pieces = (len(audio) + piece_ms - 1) // piece_ms
-    for i, start in enumerate(range(0, len(audio), piece_ms)):
-        piece = audio[start: start + piece_ms]
-        piece_path = f"{chunk_path}_sv_{i}.wav"
-        piece.export(piece_path, format="wav")
-        try:
-            print(f"  → Sarvam piece {i + 1}/{total_pieces}...")
-            full_text += _send_to_sarvam(piece_path) + " "
-        finally:
-            if os.path.exists(piece_path):
-                os.remove(piece_path)
-    return full_text.strip()
-
 def transcribe_chunk(chunk_path: str, language: str = "english") -> str:
-    if language.lower() == "hinglish":
-        return transcribe_chunk_sarvam(chunk_path)
     return transcribe_chunk_whisper(chunk_path)
 
 def transcribe_all(chunks: list, language: str = "english") -> str:
-    engine = "Sarvam AI" if language.lower() == "hinglish" else "Whisper"
-    print(f"Using {engine} for transcription.")
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            results = list(executor.map(lambda c: transcribe_chunk(c, language), chunks))
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        results = list(
-            executor.map(
-                lambda chunk: transcribe_chunk(chunk, language),
-                chunks
-            )
-        )
+        print("Transcription complete.")
+        return " ".join(results).strip()
+    finally:
+        for c in chunks:
+            if os.path.exists(c): os.remove(c)
 
-    full_transcript = " ".join(results)
+if __name__ == "__main__":
+    pass
 
-    print("Transcription complete.")
-    return full_transcript.strip()
+
+'''
+for 49 min normmal audio it took 2 min 50sec
+for yt video it takes https://youtu.be/7go0C30ia-M?si=x5CamPBn6l7RFB8w 2 min 50sec
+
+'''

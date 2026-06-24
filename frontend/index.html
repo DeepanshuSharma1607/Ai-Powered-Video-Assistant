@@ -1,0 +1,1010 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Audio Transcriber</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ── TOKENS ─────────────────────────────────────────────── */
+:root {
+  --bg:          #0D0F17;
+  --surface:     #161923;
+  --surface2:    #1C2030;
+  --border:      #252938;
+  --border2:     #303548;
+  --text:        #E8EAF0;
+  --text-muted:  #858AA0;
+  --text-dim:    #4A5068;
+  --accent:      #FF6B4A;
+  --accent-h:    #FF7D5F;
+  --accent-soft: rgba(255,107,74,.10);
+  --ok:          #3ECF8E;
+  --ok-soft:     rgba(62,207,142,.08);
+  --err:         #FF5370;
+  --err-soft:    rgba(255,83,112,.08);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+}
+
+/* ── AMBIENT ORBS (radial-gradient, no filter — zero repaint cost) ── */
+.bg-orb {
+  position: fixed;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 0;
+  will-change: transform;
+}
+.bg-orb-1 {
+  width: 780px; height: 780px;
+  background: radial-gradient(circle, rgba(255,107,74,.11) 0%, transparent 65%);
+  top: -320px; left: -220px;
+  animation: orbA 28s ease-in-out infinite;
+}
+.bg-orb-2 {
+  width: 640px; height: 640px;
+  background: radial-gradient(circle, rgba(110,70,250,.08) 0%, transparent 65%);
+  bottom: -220px; right: -160px;
+  animation: orbB 35s ease-in-out infinite;
+}
+@keyframes orbA {
+  0%,100%{ transform:translate(0,0); }
+  33%    { transform:translate(55px,-45px); }
+  66%    { transform:translate(-30px,35px); }
+}
+@keyframes orbB {
+  0%,100%{ transform:translate(0,0); }
+  50%    { transform:translate(-60px,-45px); }
+}
+
+/* ── HEADER ──────────────────────────────────────────────── */
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 48px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: rgba(13,15,23,.88);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  z-index: 100;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 600;
+  font-size: 17px;
+  letter-spacing: -.01em;
+}
+
+.wave-mark { display:flex; align-items:flex-end; gap:3px; height:18px; }
+.wave-mark span {
+  width: 3px; background: var(--accent); border-radius: 2px;
+  transform-origin: bottom;
+  animation: markwave 1.1s ease-in-out infinite;
+}
+.wave-mark span:nth-child(1){animation-delay:0s;   height:35%;}
+.wave-mark span:nth-child(2){animation-delay:.12s; height:65%;}
+.wave-mark span:nth-child(3){animation-delay:.24s; height:100%;}
+.wave-mark span:nth-child(4){animation-delay:.08s; height:50%;}
+.wave-mark span:nth-child(5){animation-delay:.18s; height:75%;}
+@keyframes markwave{ 0%,100%{transform:scaleY(.3)} 50%{transform:scaleY(1)} }
+
+.hdr-right { display:flex; align-items:center; gap:12px; }
+
+/* status pill */
+.status-pill {
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 13px;
+  border-radius: 20px;
+  border: 1px solid var(--border2);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; color: var(--text-dim);
+  transition: all .35s;
+}
+.status-pill::before {
+  content: ''; flex-shrink: 0;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--text-dim);
+  transition: background .35s, box-shadow .35s;
+}
+.status-pill.online  { color:var(--ok); border-color:rgba(62,207,142,.22); background:rgba(62,207,142,.04); }
+.status-pill.offline { color:var(--err); border-color:rgba(255,83,112,.22); }
+.status-pill.online::before  { background:var(--ok); animation:statusPing 2s ease-in-out infinite; }
+.status-pill.offline::before { background:var(--err); }
+@keyframes statusPing {
+  0%,100%{ box-shadow:0 0 0 0 rgba(62,207,142,.5); }
+  50%    { box-shadow:0 0 0 5px rgba(62,207,142,.0); }
+}
+
+.btn-ghost {
+  font-family:'Inter',sans-serif; font-weight:500; font-size:13px;
+  padding:7px 15px; border-radius:8px;
+  border:1px solid var(--border2); background:transparent; color:var(--text-muted);
+  cursor:pointer; transition:all .15s;
+}
+.btn-ghost:hover { border-color:var(--text-dim); color:var(--text); background:var(--surface); }
+
+/* ── MAIN / VIEW SYSTEM ──────────────────────────────── */
+main { flex:1; position:relative; z-index:1; }
+.view { display:none; }
+
+@keyframes viewIn {
+  from { opacity:0; transform:translateY(14px); }
+  to   { opacity:1; transform:translateY(0); }
+}
+
+/* ══ VIEW: UPLOAD ════════════════════════════════════ */
+#view-upload.view.active {
+  display:flex; flex-direction:column;
+  max-width:660px; margin:0 auto;
+  padding:60px 24px 80px; width:100%;
+  animation: viewIn .45s ease both;
+}
+
+.eyebrow {
+  font-family:'JetBrains Mono',monospace;
+  font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--accent); margin-bottom:16px; opacity:.9;
+}
+.eyebrow::after { content:'_'; animation:blink 1.1s step-end infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+.page-title {
+  font-family:'Space Grotesk',sans-serif; font-weight:700;
+  font-size:clamp(30px, 5vw, 48px); line-height:1.08;
+  letter-spacing:-.03em; margin-bottom:16px;
+}
+/* animated gradient on <em> — GPU-safe: only background-position */
+.page-title em {
+  font-style:normal;
+  background: linear-gradient(90deg, #FF6B4A, #FFB08A, #FF6B4A);
+  background-size:200% 100%;
+  -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+  background-clip:text;
+  animation: gradShift 3.5s ease-in-out infinite;
+}
+@keyframes gradShift {
+  0%,100%{ background-position:0% 50%; }
+  50%    { background-position:100% 50%; }
+}
+
+.page-sub {
+  color:var(--text-muted); font-size:15px; line-height:1.75;
+  max-width:480px; margin-bottom:40px;
+}
+
+/* ── TABS (underline style, slides via border transition) ── */
+.tabs {
+  display:flex;
+  border-bottom:1px solid var(--border2);
+  margin-bottom:22px;
+}
+.tab {
+  padding:10px 22px; border:none;
+  border-bottom:2px solid transparent;
+  background:transparent; color:var(--text-muted);
+  font-family:'Inter',sans-serif; font-size:14px; font-weight:500;
+  cursor:pointer; transition:color .2s, border-color .2s;
+  margin-bottom:-1px; display:flex; align-items:center; gap:7px;
+}
+.tab.active   { color:var(--accent); border-bottom-color:var(--accent); }
+.tab:not(.active):hover { color:var(--text); }
+
+.tab-pane { display:none; }
+.tab-pane.active { display:block; }
+
+/* ── DROP ZONE ──────────────────────────────────────── */
+.drop-zone {
+  position:relative;
+  border:1.5px dashed var(--border2); border-radius:16px;
+  padding:54px 28px; text-align:center; cursor:pointer;
+  /* dot-grid background — pure CSS, zero JS cost */
+  background-color: var(--surface);
+  background-image: radial-gradient(circle, var(--border) 1px, transparent 1px);
+  background-size:22px 22px;
+  transition:border-color .25s, box-shadow .25s, transform .2s;
+  overflow:hidden;
+}
+.drop-zone::after {
+  content:'';
+  position:absolute; inset:0; border-radius:16px;
+  background:radial-gradient(ellipse at center, rgba(255,107,74,.08) 0%, transparent 70%);
+  opacity:0; transition:opacity .3s; pointer-events:none;
+}
+.drop-zone:hover::after,
+.drop-zone.drag-over::after { opacity:1; }
+.drop-zone:hover {
+  border-color:var(--accent);
+  box-shadow:0 0 0 1px rgba(255,107,74,.12), 0 12px 40px rgba(255,107,74,.08);
+  transform:translateY(-2px);
+}
+.drop-zone.drag-over {
+  border-color:var(--accent);
+  box-shadow:0 0 0 2px rgba(255,107,74,.22), 0 16px 48px rgba(255,107,74,.12);
+  transform:scale(1.015);
+}
+.drop-zone input[type="file"] {
+  position:absolute; inset:0; opacity:0; cursor:pointer; width:100%; height:100%;
+}
+.drop-icon {
+  font-size:36px; margin-bottom:14px; display:block;
+  transition:transform .3s ease;
+}
+.drop-zone:hover .drop-icon { transform:translateY(-5px) scale(1.12); }
+.drop-title {
+  font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:16px; margin-bottom:8px;
+}
+.drop-sub { color:var(--text-muted); font-size:13px; line-height:1.75; }
+.drop-sub code {
+  font-family:'JetBrains Mono',monospace; font-size:11px;
+  background:var(--border); padding:2px 6px; border-radius:4px; color:var(--text-muted);
+}
+
+/* selected-file chip */
+.selected-file {
+  display:none; align-items:center; justify-content:space-between;
+  margin-top:14px; padding:12px 18px;
+  background:var(--surface);
+  border:1px solid rgba(62,207,142,.28); border-radius:10px;
+}
+.selected-file.visible { display:flex; animation:chipIn .28s ease both; }
+@keyframes chipIn {
+  from{ opacity:0; transform:translateY(8px); }
+  to  { opacity:1; transform:translateY(0); }
+}
+.sf-name { display:flex; align-items:center; gap:8px; font-size:14px; font-weight:500; color:var(--ok); }
+.sf-size { font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--text-muted); }
+
+/* ── YOUTUBE PANE ───────────────────────────────────── */
+.yt-wrap { display:flex; gap:10px; }
+.yt-input {
+  flex:1; background:var(--surface);
+  border:1.5px solid var(--border2); border-radius:10px;
+  padding:13px 16px; font-family:'Inter',sans-serif; font-size:14px; color:var(--text);
+  outline:none; transition:border-color .2s, box-shadow .2s;
+}
+.yt-input:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(255,107,74,.08); }
+.yt-input::placeholder { color:var(--text-dim); }
+
+/* ── OPTIONS + CTA ──────────────────────────────────── */
+.options-row { display:flex; align-items:center; margin:20px 0 22px; }
+.chk-label {
+  display:flex; align-items:center; gap:8px;
+  font-size:14px; color:var(--text-muted); cursor:pointer; user-select:none;
+}
+.chk-label input { width:15px; height:15px; accent-color:var(--accent); cursor:pointer; }
+
+/* PRIMARY BUTTON — shimmer uses transform only (GPU) */
+.btn-primary {
+  position:relative; width:100%; padding:15px;
+  border:none; border-radius:12px;
+  background:linear-gradient(135deg, #FF6B4A 0%, #E84A28 100%);
+  color:#160F08; font-family:'Inter',sans-serif;
+  font-weight:700; font-size:15px;
+  cursor:pointer; overflow:hidden;
+  box-shadow:0 4px 24px rgba(255,107,74,.28);
+  transition:transform .15s, box-shadow .15s, opacity .15s;
+  letter-spacing:.01em;
+}
+.btn-primary::after {
+  content:''; position:absolute; top:0; left:0;
+  width:55%; height:100%;
+  background:linear-gradient(90deg, transparent, rgba(255,255,255,.22), transparent);
+  transform:translateX(-180%) skewX(-18deg);
+  animation:shimmer 3.8s ease-in-out infinite;
+}
+@keyframes shimmer {
+  0%,20%  { transform:translateX(-180%) skewX(-18deg); }
+  70%,100%{ transform:translateX(360%)  skewX(-18deg); }
+}
+.btn-primary:hover:not(:disabled) {
+  transform:translateY(-2px);
+  box-shadow:0 8px 32px rgba(255,107,74,.4);
+}
+.btn-primary:active:not(:disabled) { transform:translateY(0); }
+.btn-primary:disabled { opacity:.42; cursor:not-allowed; transform:none; box-shadow:none; }
+.btn-primary:disabled::after { display:none; }
+
+.error-banner {
+  display:none; margin-top:14px; padding:12px 16px;
+  background:var(--err-soft); border:1px solid rgba(255,83,112,.22);
+  border-radius:10px; font-size:14px; color:var(--err);
+}
+
+/* ══ VIEW: PROCESSING ════════════════════════════════ */
+#view-processing.view.active {
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  min-height:calc(100vh - 68px);
+  text-align:center; padding:40px 24px;
+  animation:viewIn .4s ease both;
+}
+
+/* triple concentric rotating rings — transform only (GPU) */
+.proc-container {
+  position:relative; display:flex;
+  align-items:center; justify-content:center;
+  width:168px; height:168px; margin-bottom:38px;
+}
+.proc-ring {
+  position:absolute; border-radius:50%;
+  border:2px solid transparent;
+}
+.proc-ring-1 {
+  width:158px; height:158px;
+  border-top-color:var(--accent);
+  border-right-color:rgba(255,107,74,.22);
+  animation:ringR 1.55s linear infinite;
+}
+.proc-ring-2 {
+  width:134px; height:134px;
+  border-bottom-color:rgba(255,107,74,.38);
+  border-left-color:rgba(255,107,74,.12);
+  animation:ringR 2.3s linear infinite reverse;
+}
+.proc-ring-3 {
+  width:110px; height:110px;
+  border-top-color:rgba(255,107,74,.14);
+  border-right-color:rgba(255,107,74,.45);
+  animation:ringR 3.1s linear infinite;
+}
+@keyframes ringR { to{ transform:rotate(360deg); } }
+
+/* inner wave — same approach as original */
+.proc-wave {
+  display:flex; align-items:flex-end; gap:4px; height:42px;
+  position:relative; z-index:1;
+}
+.proc-wave span {
+  width:4px; background:var(--accent); border-radius:3px;
+  transform-origin:bottom; animation:procwave .88s ease-in-out infinite;
+}
+@keyframes procwave { 0%,100%{transform:scaleY(.1)} 50%{transform:scaleY(1)} }
+
+.proc-title {
+  font-family:'Space Grotesk',sans-serif;
+  font-weight:600; font-size:22px; letter-spacing:-.01em; margin-bottom:12px;
+}
+/* JS fades this in/out via style.opacity + style.transform */
+.proc-sub {
+  color:var(--text-muted); font-size:12px;
+  font-family:'JetBrains Mono',monospace; letter-spacing:.06em;
+  transition:opacity .3s ease, transform .3s ease;
+}
+
+/* ══ VIEW: RESULTS ═══════════════════════════════════ */
+#view-results.view.active {
+  display:flex; flex-direction:column;
+  max-width:760px; margin:0 auto;
+  padding:52px 24px 80px; width:100%;
+  animation:viewIn .45s ease both;
+}
+
+.results-hdr {
+  display:flex; align-items:flex-start; justify-content:space-between;
+  margin-bottom:28px; gap:12px;
+}
+.results-title {
+  font-family:'Space Grotesk',sans-serif; font-weight:700;
+  font-size:28px; letter-spacing:-.02em;
+}
+.badge {
+  display:inline-flex; align-items:center; gap:5px;
+  padding:4px 10px; border-radius:20px;
+  font-family:'JetBrains Mono',monospace; font-size:11px;
+  background:var(--ok-soft); color:var(--ok);
+  border:1px solid rgba(62,207,142,.2);
+  margin-left:10px; vertical-align:middle;
+  animation:badgePop .38s .05s cubic-bezier(.34,1.56,.64,1) both;
+}
+@keyframes badgePop {
+  from{ opacity:0; transform:scale(.65); }
+  to  { opacity:1; transform:scale(1); }
+}
+
+/* card with accent left bar */
+.card {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:16px; padding:28px;
+  margin-bottom:20px; position:relative; overflow:hidden;
+  animation:slideUp .5s ease both;
+}
+.card::before {
+  content:''; position:absolute; left:0; top:0; bottom:0; width:3px;
+  background:linear-gradient(180deg, var(--accent) 0%, rgba(255,107,74,.0) 100%);
+  border-radius:16px 0 0 16px;
+}
+@keyframes slideUp {
+  from{ opacity:0; transform:translateY(18px); }
+  to  { opacity:1; transform:translateY(0); }
+}
+.card-label {
+  font-family:'JetBrains Mono',monospace; font-size:10px;
+  letter-spacing:.1em; text-transform:uppercase;
+  color:var(--text-dim); margin-bottom:14px;
+}
+.summary-text { font-size:15px; line-height:1.88; color:var(--text); }
+
+/* Q&A card — staggered entrance */
+.qa-card {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:16px; overflow:hidden;
+  animation:slideUp .5s .18s ease both;
+}
+.qa-hdr {
+  display:flex; align-items:center;
+  padding:16px 22px; border-bottom:1px solid var(--border); gap:10px;
+}
+.qa-hdr-icon { font-size:15px; }
+.qa-hdr-title { font-family:'Space Grotesk',sans-serif; font-weight:600; font-size:15px; }
+.qa-count {
+  margin-left:auto; font-family:'JetBrains Mono',monospace;
+  font-size:11px; color:var(--text-dim); transition:color .3s;
+}
+
+/* chat scroll area */
+.chat-messages {
+  padding:18px 22px; min-height:175px; max-height:440px;
+  overflow-y:auto; display:flex; flex-direction:column; gap:14px;
+}
+.chat-messages::-webkit-scrollbar { width:4px; }
+.chat-messages::-webkit-scrollbar-thumb { background:var(--border2); border-radius:4px; }
+.chat-messages::-webkit-scrollbar-track { background:transparent; }
+
+/* each message slides in */
+.msg { display:flex; flex-direction:column; gap:5px; animation:msgSlide .25s ease both; }
+@keyframes msgSlide {
+  from{ opacity:0; transform:translateY(8px); }
+  to  { opacity:1; transform:translateY(0); }
+}
+.msg-role {
+  font-family:'JetBrains Mono',monospace; font-size:10px;
+  letter-spacing:.07em; text-transform:uppercase;
+  color:var(--text-dim); padding:0 4px;
+}
+.msg.user .msg-role { color:var(--accent); }
+.msg-content {
+  padding:12px 16px; border-radius:12px;
+  font-size:14px; line-height:1.72;
+  max-width:88%; border:1px solid var(--border); background:var(--surface2);
+}
+.msg.user .msg-content { align-self:flex-end; background:var(--accent-soft); border-color:rgba(255,107,74,.18); }
+.msg.bot  .msg-content { align-self:flex-start; }
+.msg-placeholder { text-align:center; padding:28px 0; color:var(--text-dim); font-family:'JetBrains Mono',monospace; font-size:12px; }
+
+/* typing indicator — bouncing dots */
+.typing-dots { display:flex; gap:5px; align-items:center; padding:3px 0; }
+.typing-dot {
+  width:7px; height:7px; background:var(--text-muted); border-radius:50%;
+  animation:typeBounce 1.4s ease-in-out infinite;
+}
+.typing-dot:nth-child(2){ animation-delay:.2s; }
+.typing-dot:nth-child(3){ animation-delay:.4s; }
+@keyframes typeBounce {
+  0%,60%,100%{ transform:translateY(0); }
+  30%        { transform:translateY(-7px); }
+}
+
+/* chat input row */
+.chat-input-row {
+  display:flex; gap:10px; padding:14px 22px;
+  border-top:1px solid var(--border);
+}
+.chat-input {
+  flex:1; background:var(--surface2);
+  border:1.5px solid var(--border2); border-radius:10px;
+  padding:10px 16px; font-family:'Inter',sans-serif;
+  font-size:14px; color:var(--text); outline:none;
+  transition:border-color .2s, box-shadow .2s;
+}
+.chat-input:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(255,107,74,.07); }
+.chat-input::placeholder { color:var(--text-dim); }
+.chat-input:disabled { opacity:.5; }
+
+.chat-send {
+  padding:10px 22px; border:none; border-radius:10px;
+  background:linear-gradient(135deg, #FF6B4A 0%, #E84A28 100%);
+  color:#160F08; font-family:'Inter',sans-serif;
+  font-weight:600; font-size:14px; cursor:pointer; white-space:nowrap;
+  box-shadow:0 2px 14px rgba(255,107,74,.22);
+  transition:transform .15s, box-shadow .15s, opacity .15s;
+}
+.chat-send:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 5px 20px rgba(255,107,74,.35); }
+.chat-send:disabled { opacity:.38; cursor:not-allowed; transform:none; box-shadow:none; }
+
+.new-row { display:flex; justify-content:center; margin-top:30px; }
+
+/* ── FOOTER ──────────────────────────────────────────── */
+footer {
+  text-align:center; padding:24px 20px;
+  border-top:1px solid var(--border);
+  position:relative; z-index:1;
+}
+.footer-tagline {
+  font-family:'JetBrains Mono',monospace; font-size:11px;
+  color:var(--text-dim); margin-bottom:12px; letter-spacing:.04em;
+}
+.footer-stack { display:flex; align-items:center; justify-content:center; gap:8px; flex-wrap:wrap; }
+.footer-stack code {
+  font-family:'JetBrains Mono',monospace; font-size:10px;
+  color:var(--text-dim); background:var(--surface);
+  border:1px solid var(--border); padding:3px 9px; border-radius:5px;
+  letter-spacing:.05em; transition:border-color .2s, color .2s;
+}
+.footer-stack code:hover { border-color:var(--border2); color:var(--text-muted); }
+
+/* ── RESPONSIVE ──────────────────────────────────────── */
+@media (max-width:640px) {
+  header { padding:14px 18px; }
+  #view-upload.view.active, #view-results.view.active { padding:32px 16px 60px; }
+  .results-hdr { flex-direction:column; }
+  .proc-container { width:138px; height:138px; }
+  .proc-ring-1 { width:128px; height:128px; }
+  .proc-ring-2 { width:108px; height:108px; }
+  .proc-ring-3 { width:88px;  height:88px; }
+}
+
+/* honour reduced-motion; kill all animations except opacity transitions */
+@media (prefers-reduced-motion:reduce) {
+  .wave-mark span, .proc-wave span,
+  .bg-orb, .btn-primary::after,
+  .status-pill.online::before,
+  .proc-ring, .page-title em { animation:none !important; }
+}
+</style>
+</head>
+<body>
+
+<!-- ambient orbs — fixed, pointer-events:none, no repaint overhead -->
+<div class="bg-orb bg-orb-1"></div>
+<div class="bg-orb bg-orb-2"></div>
+
+<!-- ── HEADER ─────────────────────────────────── -->
+<header>
+  <div class="brand">
+    <div class="wave-mark">
+      <span></span><span></span><span></span><span></span><span></span>
+    </div>
+    Audio Transcriber
+  </div>
+  <div class="hdr-right">
+    <span class="status-pill" id="statusPill">connecting…</span>
+    <button class="btn-ghost" id="btnNew" style="display:none" onclick="startNew()">+ New</button>
+  </div>
+</header>
+
+<main>
+
+  <!-- ── VIEW: UPLOAD ───────────────────────── -->
+  <div class="view active" id="view-upload">
+
+    <div class="eyebrow">REC — ready</div>
+    <h1 class="page-title">Every word,<br><em>written down</em> for you.</h1>
+    <p class="page-sub">Upload a recording or paste a YouTube link. Get a clean transcript, a smart summary, and a chat interface to query what was said.</p>
+
+    <!-- source tabs -->
+    <div class="tabs">
+      <button class="tab active" id="tab-file"    onclick="switchTab('file')">📁 File Upload</button>
+      <button class="tab"        id="tab-youtube" onclick="switchTab('youtube')">▶ YouTube URL</button>
+    </div>
+
+    <!-- file pane -->
+    <div class="tab-pane active" id="pane-file">
+      <div class="drop-zone" id="dropZone">
+        <input type="file" id="fileInput"
+          accept=".mp3,.wav,.m4a,.aac,.ogg,.flac,.mp4,.mov,.mkv,.avi,.webm,.txt,.md"
+          onchange="onFileChosen(this)">
+        <span class="drop-icon">🎵</span>
+        <div class="drop-title">Drop your file here</div>
+        <div class="drop-sub">
+          or click to browse<br><br>
+          <code>.mp3</code> <code>.wav</code> <code>.m4a</code>
+          <code>.mp4</code> <code>.txt</code> <code>.md</code> and more
+        </div>
+      </div>
+      <div class="selected-file" id="selFile">
+        <span class="sf-name" id="sfName">✓ –</span>
+        <span class="sf-size" id="sfSize">–</span>
+      </div>
+    </div>
+
+    <!-- youtube pane -->
+    <div class="tab-pane" id="pane-youtube">
+      <div class="yt-wrap">
+        <input class="yt-input" type="url" id="ytUrl"
+               placeholder="https://youtube.com/watch?v=…">
+      </div>
+    </div>
+
+    <div class="options-row">
+      <label class="chk-label">
+        <input type="checkbox" id="appendChk">
+        Append to previous transcript
+      </label>
+    </div>
+
+    <button class="btn-primary" id="btnProcess" onclick="handleProcess()">
+      ⚡ Transcribe &amp; Summarise
+    </button>
+
+    <div class="error-banner" id="errBanner"></div>
+  </div>
+
+  <!-- ── VIEW: PROCESSING ───────────────────── -->
+  <div class="view" id="view-processing">
+    <div class="proc-container">
+      <div class="proc-ring proc-ring-1"></div>
+      <div class="proc-ring proc-ring-2"></div>
+      <div class="proc-ring proc-ring-3"></div>
+      <div class="proc-wave" id="procWave"></div>
+    </div>
+    <div class="proc-title">Processing…</div>
+    <div class="proc-sub" id="procStatus">initialising pipeline</div>
+  </div>
+
+  <!-- ── VIEW: RESULTS ─────────────────────── -->
+  <div class="view" id="view-results">
+
+    <div class="results-hdr">
+      <div>
+        <div class="eyebrow">complete</div>
+        <span class="results-title">Summary</span>
+        <span class="badge">✓ done</span>
+      </div>
+      <button class="btn-ghost" onclick="startNew()">+ New</button>
+    </div>
+
+    <div class="card">
+      <div class="card-label">AI Summary</div>
+      <div class="summary-text" id="summaryText">–</div>
+    </div>
+
+    <div class="qa-card">
+      <div class="qa-hdr">
+        <span class="qa-hdr-icon">💬</span>
+        <span class="qa-hdr-title">Ask about the transcript</span>
+        <span class="qa-count" id="qaCount">0 questions asked</span>
+      </div>
+      <div class="chat-messages" id="chatMessages">
+        <div class="msg-placeholder">Ask anything about what was said…</div>
+      </div>
+      <div class="chat-input-row">
+        <input class="chat-input" id="chatInput" type="text"
+               placeholder="What was discussed about…"
+               onkeydown="if(event.key==='Enter') sendQuestion()">
+        <button class="chat-send" id="btnSend" onclick="sendQuestion()">Send →</button>
+      </div>
+    </div>
+
+    <div class="new-row">
+      <button class="btn-ghost" onclick="resetSession()"
+              style="color:var(--err);border-color:rgba(255,83,112,.25)">
+        ↺ Reset session &amp; start over
+      </button>
+    </div>
+
+  </div>
+</main>
+
+<footer>
+  <div class="footer-tagline">built for people who would rather listen than type</div>
+  <div class="footer-stack">
+    <code>whisper</code>
+    <code>mistral</code>
+    <code>chromadb</code>
+    <code>langchain</code>
+    <code>fastapi</code>
+  </div>
+</footer>
+
+<script>
+/* ── config ──────────────────────────────────────── */
+const BASE = window.location.origin;
+
+/* ── persistent user id ──────────────────────────── */
+function uid() {
+  let id = localStorage.getItem('at_uid');
+  if (!id) {
+    id = 'u_' + Math.random().toString(36).slice(2,9) + '_' + Date.now().toString(36);
+    localStorage.setItem('at_uid', id);
+  }
+  return id;
+}
+
+/* ── state ───────────────────────────────────────── */
+let activeTab  = 'file';
+let chosenFile = null;
+let qCount     = 0;
+
+/* ── processing step cycle (JS sets opacity+transform; CSS transitions) */
+const STEPS = [
+  'initialising pipeline',
+  'downloading source',
+  'extracting audio',
+  'transcribing speech',
+  'analysing content',
+  'generating summary',
+  'indexing for Q&A',
+];
+let stepInterval = null;
+
+function startStepCycle() {
+  let idx = 0;
+  const el = document.getElementById('procStatus');
+  el.style.opacity   = '1';
+  el.style.transform = 'translateY(0)';
+  el.textContent = STEPS[0];
+  clearInterval(stepInterval);
+  stepInterval = setInterval(() => {
+    el.style.opacity   = '0';
+    el.style.transform = 'translateY(7px)';
+    setTimeout(() => {
+      idx = (idx + 1) % STEPS.length;
+      el.textContent     = STEPS[idx];
+      el.style.opacity   = '1';
+      el.style.transform = 'translateY(0)';
+    }, 310);
+  }, 2700);
+}
+function stopStepCycle() {
+  clearInterval(stepInterval);
+  stepInterval = null;
+}
+
+/* ── view switching ──────────────────────────────── */
+function showView(id) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  document.getElementById('btnNew').style.display = (id === 'view-results') ? '' : 'none';
+  if (id === 'view-processing') startStepCycle();
+  else stopStepCycle();
+}
+
+/* ── tab switching ───────────────────────────────── */
+function switchTab(t) {
+  activeTab = t;
+  ['file','youtube'].forEach(n => {
+    document.getElementById('tab-'+n).classList.toggle('active', n===t);
+    document.getElementById('pane-'+n).classList.toggle('active', n===t);
+  });
+}
+
+/* ── file selection ──────────────────────────────── */
+function onFileChosen(inp) {
+  const f = inp.files[0];
+  if (!f) return;
+  chosenFile = f;
+  const sel = document.getElementById('selFile');
+  sel.classList.add('visible');
+  document.getElementById('sfName').textContent = '✓ ' + f.name;
+  document.getElementById('sfSize').textContent = fmtBytes(f.size);
+}
+function fmtBytes(b) {
+  if (b < 1024)    return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  return (b/1048576).toFixed(1) + ' MB';
+}
+
+/* ── drag & drop ─────────────────────────────────── */
+const dz = document.getElementById('dropZone');
+dz.addEventListener('dragover',  e => { e.preventDefault(); dz.classList.add('drag-over'); });
+dz.addEventListener('dragleave', ()  => dz.classList.remove('drag-over'));
+dz.addEventListener('drop', e => {
+  e.preventDefault(); dz.classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if (!f) return;
+  chosenFile = f;
+  const sel = document.getElementById('selFile');
+  sel.classList.add('visible');
+  document.getElementById('sfName').textContent = '✓ ' + f.name;
+  document.getElementById('sfSize').textContent = fmtBytes(f.size);
+});
+
+/* ── health check ────────────────────────────────── */
+async function checkHealth() {
+  const pill = document.getElementById('statusPill');
+  try {
+    const r = await fetch(`${BASE}/health`);
+    if (r.ok) {
+      pill.textContent = 'api online';
+      pill.className   = 'status-pill online';
+    } else throw new Error();
+  } catch {
+    pill.textContent = 'api offline';
+    pill.className   = 'status-pill offline';
+  }
+}
+
+/* ── main process handler ────────────────────────── */
+async function handleProcess() {
+  const btn = document.getElementById('btnProcess');
+  const err = document.getElementById('errBanner');
+  err.style.display = 'none';
+  const append = document.getElementById('appendChk').checked;
+  try {
+    btn.disabled = true;
+    if (activeTab === 'file') {
+      if (!chosenFile) { showErr('Please select a file first.'); btn.disabled=false; return; }
+      showView('view-processing');
+      await uploadFile(chosenFile, append);
+    } else {
+      const url = document.getElementById('ytUrl').value.trim();
+      if (!url) { showErr('Please enter a YouTube URL.'); btn.disabled=false; return; }
+      showView('view-processing');
+      await uploadYoutube(url, append);
+    }
+  } catch(e) {
+    showView('view-upload');
+    showErr(e.message || 'Something went wrong. Is the backend running?');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ── API: POST /process_text_audio ───────────────── */
+async function uploadFile(file, append) {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('append_previous', append ? 'true' : 'false');
+  form.append('user_id', uid());
+  const r = await fetch(`${BASE}/process_text_audio`, { method:'POST', body:form });
+  if (!r.ok) {
+    const e = await r.json().catch(()=>({}));
+    throw new Error(e.detail || `Server error ${r.status}`);
+  }
+  const d = await r.json();
+  showResults(d.summary || d['summary '] || 'No summary returned.');
+}
+
+/* ── API: POST /youtube_process ──────────────────── */
+async function uploadYoutube(url, append) {
+  const r = await fetch(`${BASE}/youtube_process`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ url, user_id:uid(), append }),
+  });
+  if (!r.ok) {
+    const e = await r.json().catch(()=>({}));
+    throw new Error(e.detail || `Server error ${r.status}`);
+  }
+  const d = await r.json();
+  showResults(d.summary || d['summary '] || 'No summary returned.');
+}
+
+/* ── API: POST /question ─────────────────────────── */
+async function sendQuestion() {
+  const inp = document.getElementById('chatInput');
+  const q = inp.value.trim();
+  if (!q) return;
+  const btn = document.getElementById('btnSend');
+  btn.disabled = true; inp.disabled = true; inp.value = '';
+  appendMsg('user', q);
+  appendTypingIndicator();
+  try {
+    const r = await fetch(`${BASE}/question`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ user_id:uid(), question:q }),
+    });
+    const d = await r.json();
+    removeTypingIndicator();
+    if (!r.ok) {
+      appendMsg('bot', '⚠ ' + (d.detail || 'Error from server.'));
+    } else {
+      appendMsg('bot', d.answer || 'No answer returned.');
+      qCount++;
+      document.getElementById('qaCount').textContent =
+        qCount + ' question' + (qCount !== 1 ? 's' : '') + ' asked';
+    }
+  } catch {
+    removeTypingIndicator();
+    appendMsg('bot', '⚠ Network error. Is the backend running?');
+  }
+  btn.disabled = false; inp.disabled = false; inp.focus();
+}
+
+/* ── API: DELETE /reset ──────────────────────────── */
+async function resetSession() {
+  try { await fetch(`${BASE}/reset?user=${uid()}`, { method:'DELETE' }); } catch(_){}
+  startNew();
+}
+
+/* ── typing indicator ────────────────────────────── */
+function appendTypingIndicator() {
+  const box = document.getElementById('chatMessages');
+  const el  = document.createElement('div');
+  el.className = 'msg bot'; el.id = 'typingIndicator';
+  el.innerHTML = `<span class="msg-role">assistant</span>
+    <div class="msg-content">
+      <div class="typing-dots">
+        <span class="typing-dot"></span>
+        <span class="typing-dot"></span>
+        <span class="typing-dot"></span>
+      </div>
+    </div>`;
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
+}
+function removeTypingIndicator() {
+  const el = document.getElementById('typingIndicator');
+  if (el) el.remove();
+}
+
+/* ── UI helpers ──────────────────────────────────── */
+function showResults(summary) {
+  document.getElementById('summaryText').textContent = summary;
+  document.getElementById('chatMessages').innerHTML =
+    '<div class="msg-placeholder">Ask anything about what was said…</div>';
+  qCount = 0;
+  document.getElementById('qaCount').textContent = '0 questions asked';
+  showView('view-results');
+}
+
+function appendMsg(role, text) {
+  const box = document.getElementById('chatMessages');
+  const ph  = box.querySelector('.msg-placeholder');
+  if (ph) ph.remove();
+  const el = document.createElement('div');
+  el.className = 'msg ' + role;
+  el.innerHTML = `<span class="msg-role">${role==='user'?'you':'assistant'}</span>
+    <div class="msg-content">${esc(text)}</div>`;
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
+}
+
+function esc(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function showErr(msg) {
+  const el = document.getElementById('errBanner');
+  el.textContent = '⚠ ' + msg;
+  el.style.display = 'block';
+}
+
+function startNew() {
+  chosenFile = null;
+  document.getElementById('fileInput').value = '';
+  const sel = document.getElementById('selFile');
+  sel.classList.remove('visible');
+  sel.style.display = ''; // reset inline display just in case
+  document.getElementById('ytUrl').value = '';
+  document.getElementById('appendChk').checked = false;
+  document.getElementById('errBanner').style.display = 'none';
+  document.getElementById('btnProcess').disabled = false;
+  showView('view-upload');
+}
+
+/* ── build processing waveform ───────────────────── */
+(function() {
+  const w = document.getElementById('procWave');
+  [30,68,95,48,100,72,36,88,56,82,42,96,66,32,76,52,90,44,70,80].forEach((h, i) => {
+    const b = document.createElement('span');
+    b.style.height = h + '%';
+    b.style.animationDelay = (i * 0.065) + 's';
+    w.appendChild(b);
+  });
+})();
+
+/* ── init ────────────────────────────────────────── */
+checkHealth();
+</script>
+</body>
+</html>

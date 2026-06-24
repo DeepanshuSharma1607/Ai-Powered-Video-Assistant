@@ -1,84 +1,140 @@
-from dotenv import load_dotenv
-from Audio_Preprocessing.audio_processor import process_input
-from Audio_Preprocessing.transcriber import transcribe_all
-from Audio_Preprocessing.llm_pipeline import generate_title, summarize, extract_action_items, extract_key_decisions, extract_questions
-from Audio_Preprocessing.vector_store import build_rag_chain, ask_questions
 from concurrent.futures import ThreadPoolExecutor
+from .vector_store import build_rag_chain, get_embeddings
+from .transcriber import transcribe_all, load_model
+from .audio_processor import process_input
+from .llm_pipeline import summarize_title
+from dotenv import load_dotenv
 from typing import Optional
+import threading
+import shutil
+import json
+import os
 
 load_dotenv()
 
-def run_pipeline(
+SESSION_FILES = "sessions.json"
+_session_lock = threading.Lock()  # guards user_ids dict + sessions.json writes
+
+def save_session():
+    to_save={
+        k:{x : v[x] for x in ('user_id' , "summary" , "transcript")}
+        for k , v in user_ids.items()
+    }
+    with open(SESSION_FILES , "w") as f:
+        json.dump(to_save,f)
+
+def load_session():
+    if os.path.exists(SESSION_FILES):
+        with open(SESSION_FILES) as f:
+            return json.load(f)
+    return {}
+
+user_ids = load_session()
+
+def warm_up():
+    """
+    pre-load heavy models in the main thread before user input.
+    """
+
+    print("warming up models...")
+    load_model()
+    get_embeddings()
+    print("Models ready ...")
+
+
+def preprocessing(
     source: Optional[str] = None,
     transcript: Optional[str] = None,
-    language: str = "english"
-) -> dict:
-
+    language : str = "english"
+):
     if transcript is None:
-
         if source is None:
             raise ValueError(
                 "Either source or transcript must be provided."
             )
 
         chunks = process_input(source)
+        session_dir = os.path.dirname(chunks[0]) if chunks else None
 
-        transcript = transcribe_all(
-            chunks,
-            language=language
+        try:
+            transcript = transcribe_all(
+                chunks,
+                language=language
+            )
+        finally:
+            # transcribe_all already removes the chunk files; this removes
+            # the per-session download folder itself (and anything else
+            # left behind, e.g. a failed/partial download).
+            if session_dir and os.path.isdir(session_dir):
+                shutil.rmtree(session_dir, ignore_errors=True)
+
+    return transcript
+
+
+def run_pipeline(
+    source: Optional[str] = None,
+    transcript: Optional[str] = None,
+    user_id : str=None,
+    append = False,
+    language: str = "english") -> dict:
+
+    if user_id in user_ids and not append:
+        return user_ids[user_id]
+
+    if append:
+        if user_id not in user_ids:
+            raise ValueError(
+                f"Session '{user_id}' does not exist."
+            )
+
+        # new_transcript = ONLY the freshly transcribed audio/text.
+        # This is what gets embedded into the vector store — never the
+        # combined history, otherwise old content gets re-embedded and
+        # duplicated every time someone appends.
+        new_transcript = preprocessing(
+            source,
+            transcript,
+            language
         )
 
+        old_transcript = user_ids[user_id]["transcript"]
+        full_transcript = old_transcript + "\n\n" + new_transcript
+
+    else:
+        new_transcript = preprocessing(
+            source,
+            transcript,
+            language
+        )
+        full_transcript = new_transcript
+
     print(
-        f"Raw Transcription (first 300 chars):\n{transcript[:300]}"
+        f"Raw Transcription (first 300 chars):\n{new_transcript[:300]}"
     )
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        future_title = executor.submit(generate_title, transcript)
-        future_summary = executor.submit(summarize, transcript)
-        future_actions = executor.submit(extract_action_items, transcript)
-        future_decisions = executor.submit(extract_key_decisions, transcript)
-        future_questions = executor.submit(extract_questions, transcript)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        # Summary always needs the FULL history so the meeting recap stays complete.
+        title_summary_future = executor.submit(summarize_title, full_transcript)
+        # Vector store only ever gets the NEW chunk — old chunks are already in Chroma.
+        rag_future = executor.submit(build_rag_chain, new_transcript, user_id, append)
 
-        title = future_title.result()
-        summary = future_summary.result()
-        action_items = future_actions.result()
-        decisions = future_decisions.result()
-        questions = future_questions.result()
+    title_summary = title_summary_future.result()
+    rag_chain = rag_future.result()
 
-    rag_chain = build_rag_chain(transcript)
+    with _session_lock:
+        user_ids[user_id]={
+            "user_id" : user_id,
+            "summary": title_summary,
+            "transcript": full_transcript,
+        }
+        save_session()
+    return user_ids[user_id]
 
-    return {
-        "title": title,
-        "transcript": transcript,
-        "summary": summary,
-        "action_items": action_items,
-        "decisions": decisions,
-        "questions": questions,
-        "rag_chain": rag_chain
-    }
+if __name__=="__main__":
+    pass
 
-if __name__ == "__main__":
-    source = input("Enter YouTube URL or local file path: ").strip()
-    language = input("Language (english/hinglish): ").strip() or "english"
-    result = run_pipeline(source, language)
+'''
+1hr and 10min video took 8min with 1 question
 
-    print("\n" + "=" * 60)
-    print(f"📌 Title: {result['title']}")
-    print(f"\n📋 Summary:\n{result['summary']}")
-    print(f"\n✅ Action Items:\n{result['action_items']}")
-    print(f"\n🔑 Key Decisions:\n{result['decisions']}")
-    print(f"\n❓ Open Questions:\n{result['questions']}")
-    print("=" * 60)
 
-    print("\nChat with your meeting (type 'exit' to quit)\n")
-    rag_chain = result['rag_chain']
-
-    while True:
-        questions = input("You: ").strip()
-        if questions.lower() in ['exit', 'quit', 'q']:
-            print("Goodbye...")
-            break
-        if not questions:
-            continue
-        answer = ask_questions(rag_chain, questions)
-        print(f"\nAssistant: {answer}\n")
+'''
