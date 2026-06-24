@@ -267,7 +267,7 @@ This project is licensed under the [MIT License](LICENSE).
 
 <div align="center">
 
-Built with ❤️ by [Deepanshu Sharma](https://github.com/DeepanshuSharma1607)
+Built with by [Deepanshu Sharma](https://github.com/DeepanshuSharma1607)
 
 ⭐ If you found this useful, give it a star!
 
