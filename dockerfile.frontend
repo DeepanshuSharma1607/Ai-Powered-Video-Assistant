@@ -1,13 +1,44 @@
-FROM python:3.11-slim
+version: '3.9'
 
-WORKDIR /app
+services:
 
-COPY requirements.txt .
+  # ── FastAPI backend ──────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: dockerfile.backend
+    container_name: echomind_backend
+    env_file: .env                          # MISTRAL_API_KEY, WHISPER_MODEL, etc.
+    ports:
+      - "8000:8000"                         # direct access during development
+    volumes:
+      - ./vector_database:/app/vector_database   # ChromaDB persistence
+      - ./downloads:/app/downloads               # temp download dir
+      - ./sessions.json:/app/sessions.json       # user session state
+      - hf_cache:/root/.cache/huggingface        # HuggingFace model cache
+      - whisper_cache:/root/.cache/whisper       # faster-whisper model cache
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s          # models take ~30-60 s to warm up on first boot
 
-RUN pip install --no-cache-dir -r requirements.txt
+  # ── nginx frontend ───────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: dockerfile.frontend
+    container_name: echomind_frontend
+    ports:
+      - "80:80"                  # visit http://localhost in the browser
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
 
-COPY . .
-
-EXPOSE 8501
-
-CMD ["streamlit", "run", "frontend/ui.py", "--server.address=0.0.0.0", "--server.port=8501"]
+# ── Named volumes for model caches ────────────────────────────────────────────
+volumes:
+  hf_cache:
+  whisper_cache:
